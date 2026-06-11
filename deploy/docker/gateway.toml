@@ -25,13 +25,23 @@
 version = 1
 
 [openshell.gateway]
-# Bind to loopback only.  The Docker driver adds an extra listener on the
-# bridge interface automatically so sandbox containers can reach the gateway.
-bind_address        = "127.0.0.1:8080"
-health_bind_address = "127.0.0.1:8081"
+# Bind on all interfaces so both the host and Docker bridge sandboxes can
+# reach the gateway through the published host ports.
+bind_address        = "0.0.0.0:8080"
+health_bind_address = "0.0.0.0:8081"
 log_level           = "info"
 compute_drivers     = ["docker"]
 disable_tls         = true
+
+[openshell.gateway.auth]
+allow_unauthenticated_users = true
+
+[openshell.gateway.gateway_jwt]
+signing_key_path = "/var/lib/openshell/jwt/signing.pem"
+public_key_path  = "/var/lib/openshell/jwt/public.pem"
+kid_path         = "/var/lib/openshell/jwt/kid"
+gateway_id       = "local"
+ttl_secs         = 0
 
 [openshell.drivers.docker]
 # Default image pulled for `openshell sandbox create` without --from.

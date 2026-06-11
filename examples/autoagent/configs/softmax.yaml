@@ -1,0 +1,39 @@
+kernel_name: "softmax_kernel"
+description: "Softmax kernel for a 2D tensor along the last dimension."
+parameters:
+  - {name: "input", type: "tensor", dtype: "float32"}
+  - {name: "output", type: "tensor", dtype: "float32"}
+  - {name: "M", type: "int"}
+  - {name: "N", type: "int"}
+test_inputs:
+  - {name: "input", type: "tensor", shape: [128, 1024], generator: "randn"}
+  - {name: "output", type: "tensor", shape: [128, 1024], generator: "zeros"}
+  - {name: "M", type: "int", value: 128}
+  - {name: "N", type: "int", value: 1024}
+verification:
+  reference_code: |
+    expected = torch.softmax(input, dim=-1)
+  tolerance: {atol: 1.0e-3, rtol: 1.0e-3}
+baseline:
+  kernel_code: |
+    __global__ void softmax_kernel(float* input, float* output, int M, int N) {
+        int row = blockIdx.x;
+        if (row < M) {
+            float max_val = -1e20f;
+            for (int i = 0; i < N; ++i) {
+                if (input[row * N + i] > max_val) max_val = input[row * N + i];
+            }
+            float sum_exp = 0.0f;
+            for (int i = 0; i < N; ++i) {
+                float val = expf(input[row * N + i] - max_val);
+                output[row * N + i] = val;
+                sum_exp += val;
+            }
+            for (int i = 0; i < N; ++i) {
+                output[row * N + i] /= sum_exp;
+            }
+        }
+    }
+  grid_str: "M, 1, 1"
+  block: [1, 1, 1]
+  shared_mem: 0

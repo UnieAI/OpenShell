@@ -1,0 +1,36 @@
+kernel_name: "gemm_kernel"
+description: "Standard matrix multiplication kernel: C = A * B"
+parameters:
+  - {name: "A", type: "tensor", dtype: "float32"}
+  - {name: "B", type: "tensor", dtype: "float32"}
+  - {name: "C", type: "tensor", dtype: "float32"}
+  - {name: "M", type: "int"}
+  - {name: "N", type: "int"}
+  - {name: "K", type: "int"}
+test_inputs:
+  - {name: "A", type: "tensor", shape: [1024, 1024], generator: "randn"}
+  - {name: "B", type: "tensor", shape: [1024, 1024], generator: "randn"}
+  - {name: "C", type: "tensor", shape: [1024, 1024], generator: "zeros"}
+  - {name: "M", type: "int", value: 1024}
+  - {name: "N", type: "int", value: 1024}
+  - {name: "K", type: "int", value: 1024}
+verification:
+  reference_code: |
+    expected = torch.mm(A, B)
+  tolerance: {atol: 1.0e-3, rtol: 1.0e-3}
+baseline:
+  kernel_code: |
+    __global__ void gemm_kernel(float* A, float* B, float* C, int M, int N, int K) {
+        int row = blockIdx.y * blockDim.y + threadIdx.y;
+        int col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row < M && col < N) {
+            float val = 0.0f;
+            for (int k = 0; k < K; ++k) {
+                val += A[row * K + k] * B[k * N + col];
+            }
+            C[row * N + col] = val;
+        }
+    }
+  grid_str: "(N + 15) / 16, (M + 15) / 16"
+  block: [16, 16, 1]
+  shared_mem: 0

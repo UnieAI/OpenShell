@@ -1,0 +1,10 @@
+results/
+.optimize-state/
+__pycache__/
+*.pyc
+ncu_reports/
+kernels/
+output/
+*.so
+*.cu
+active_kernel.yaml

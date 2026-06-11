@@ -1,0 +1,25 @@
+[project]
+name = "openshell-autoagent-example"
+version = "0.1.0"
+description = "OpenShell example for compile-and-verify CUDA kernel iteration"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "apache-tvm-ffi",
+    "Jinja2>=3.1.0",
+    "optuna>=4.1.0",
+    "PyYAML>=6.0.0",
+    "torch==2.11.0+cu130",
+    "torchaudio==2.11.0+cu130",
+    "torchvision==0.26.0+cu130",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+torchaudio = { index = "pytorch" }

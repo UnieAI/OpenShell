@@ -1,0 +1,22 @@
+TEMPLATE_PATH: "kernel_template.cu.j2"
+
+# Generated artifacts are resolved relative to AUTOAGENT_STATE_DIR unless an
+# absolute path is provided.
+ACTIVE_KERNEL_YAML: "active_kernel.yaml"
+OUTPUT_CU: "kernel.cu"
+OUTPUT_SO: "kernel.so"
+REPORT_DIR: "ncu_reports"
+KERNELS_DIR: "kernels"
+OUTPUT_DIR: "output"
+
+# The OpenShell example image is intentionally scoped to compile and verify.
+# Profiling must run in a dedicated environment where NCU is allowed.
+PROFILE_EXECUTOR: "disabled"
+
+# Tree-search optimization still supports the Codex CLI when an alternative
+# image or runtime provides it.
+LLM_BACKEND: "codex-exec"
+CODEX_COMMAND: "codex"
+NCU_COMMAND: "ncu"
+NCU_SET:
+  - detailed

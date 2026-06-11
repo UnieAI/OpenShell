@@ -83,12 +83,11 @@ services:
       # The Docker driver injects host.openshell.internal:<gateway-port> into sandbox
       # containers as the callback endpoint.  The gateway's internal port is 8080, so
       # host port 8080 must be published at the same number so that
-      # host.openshell.internal:8080 routes to the gateway container.
-      # gateway.toml binds to 127.0.0.1 — the Docker driver adds the bridge listener
-      # automatically so sandbox containers can reach the gateway without 0.0.0.0.
-      - "127.0.0.1:${OPENSHELL_PORT:-8080}:8080"
+      # host.openshell.internal:8080 routes to the gateway container from
+      # both the host and sibling sandbox containers on the Docker bridge.
+      - "${OPENSHELL_PORT:-8080}:8080"
       # Health endpoint  (GET /healthz, GET /readyz)
-      - "127.0.0.1:${OPENSHELL_HEALTH_PORT:-8081}:8081"
+      - "${OPENSHELL_HEALTH_PORT:-8081}:8081"
 
     volumes:
       # Docker socket — lets the gateway create and manage sandbox containers.

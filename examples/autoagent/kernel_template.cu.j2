@@ -1,0 +1,22 @@
+#include <tvm/ffi/tvm_ffi.h>
+
+// --- LLM Generated Kernel Code ---
+{{ kernel_code }}
+
+// --- Universal FFI Bridge ---
+void dispatch_kernel_(
+    {% for param in parameters %}
+    {{ "tvm::ffi::Tensor " if param.type == "tensor" else "int " }}{{ param.name }}{{ "," if not loop.last }}
+    {% endfor %}
+) {
+    dim3 block({{ block[0] }}, {{ block[1] }}, {{ block[2] }});
+    dim3 grid({{ grid_str }}); // Evaluated in Python or passed as string
+    
+    {{ kernel_name }}<<<grid, block, {{ shared_mem if shared_mem else 0 }}>>>(
+        {% for param in parameters %}
+        {{ "(float*)" + param.name + ".data_ptr()" if param.type == "tensor" else param.name }}{{ "," if not loop.last }}
+        {% endfor %}
+    );
+}
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(dispatch_kernel, dispatch_kernel_);
