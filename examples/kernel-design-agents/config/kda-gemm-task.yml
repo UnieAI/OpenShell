@@ -1,0 +1,25 @@
+# Default config for the OpenShell Kernel Design Agents example.
+# Keep this file flat: one key/value per line.
+
+workspace: "examples/kernel-design-agents/results/kda-flashinfer-task"
+starter_kit: "examples/kernel-design-agents/starter-kit"
+gpus: "1"
+model: "gpt-5.4-mini"
+reasoning: "low"
+auto_scaffold: true
+force_scaffold: false
+
+solution_name: "openshell-kda-fused-moe-v1"
+definition: "fused_moe"
+author: "openshell"
+language: "triton"
+entry_point: "kernel"
+
+task_name: "FlashInfer fused_moe kernel optimization"
+objective: "improve the vendored starter-kit kernel for the fused_moe track while preserving correctness"
+correctness: "solution.json packs successfully and local benchmark outputs remain numerically valid for the selected definition"
+target: "reduce latency versus the FlashInfer baseline or produce a clearly justified optimization plan toward that goal"
+allowed: "edit files inside this workspace only; use Triton or CUDA in the starter kit plus existing local dependencies"
+validate: "python scripts/pack_solution.py"
+evaluate: "FIB_DATASET_PATH=/path/to/mlsys26-contest python scripts/run_local.py"
+promote: "solution.json packs successfully and benchmark evidence shows a real speedup without correctness regressions"
