@@ -2,6 +2,8 @@ FROM pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel
 
 ARG CODEX_NPM_PACKAGE="@openai/codex"
 ARG CODEX_VERSION="0.130.0"
+ARG KDA_PYTHON_PACKAGES="flashinfer-bench modal"
+ARG KDA_VENV_DIR="/opt/kda-venv"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
@@ -11,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     nodejs \
     npm \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 1000660000 sandbox \
@@ -25,6 +28,10 @@ WORKDIR /app
 
 COPY . /app
 
+RUN python -m venv "${KDA_VENV_DIR}" \
+    && "${KDA_VENV_DIR}/bin/pip" install --no-cache-dir --upgrade pip \
+    && "${KDA_VENV_DIR}/bin/pip" install --no-cache-dir ${KDA_PYTHON_PACKAGES}
+
 RUN npm install -g "${CODEX_NPM_PACKAGE}@${CODEX_VERSION}" \
     && codex --version \
     && chmod +x /app/*.sh /app/scripts/*.sh \
@@ -32,5 +39,6 @@ RUN npm install -g "${CODEX_NPM_PACKAGE}@${CODEX_VERSION}" \
 
 ENV KDA_WORKSPACE_ROOT=/sandbox
 ENV CUDA_HOME=/usr/local/cuda
-ENV PATH=/usr/local/cuda/bin:$PATH
+ENV KDA_VENV_DIR=${KDA_VENV_DIR}
+ENV PATH=${KDA_VENV_DIR}/bin:/usr/local/cuda/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}

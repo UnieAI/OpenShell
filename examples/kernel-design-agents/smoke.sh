@@ -107,11 +107,11 @@ run_exec() {
 
 run_exec \
     "Verify packaged tools" \
-    /bin/sh -lc 'runtime_root=/tmp/kda-smoke-codex-runtime && mkdir -p "$runtime_root/home" "$runtime_root/tmp" "$runtime_root/cache" "$runtime_root/config" "$runtime_root/data" "$runtime_root/state" "$runtime_root/codex" "$runtime_root/codex/sqlite" && export HOME="$runtime_root/home" TMPDIR="$runtime_root/tmp" TMP="$runtime_root/tmp" TEMP="$runtime_root/tmp" XDG_CACHE_HOME="$runtime_root/cache" XDG_CONFIG_HOME="$runtime_root/config" XDG_DATA_HOME="$runtime_root/data" XDG_STATE_HOME="$runtime_root/state" CODEX_HOME="$runtime_root/codex" CODEX_SQLITE_HOME="$runtime_root/codex/sqlite" && codex --version && node --version && git --version && jq --version'
+    /bin/sh -lc 'runtime_root=/tmp/kda-smoke-codex-runtime && mkdir -p "$runtime_root/home" "$runtime_root/tmp" "$runtime_root/cache" "$runtime_root/config" "$runtime_root/data" "$runtime_root/state" "$runtime_root/codex" "$runtime_root/codex/sqlite" && export HOME="$runtime_root/home" TMPDIR="$runtime_root/tmp" TMP="$runtime_root/tmp" TEMP="$runtime_root/tmp" XDG_CACHE_HOME="$runtime_root/cache" XDG_CONFIG_HOME="$runtime_root/config" XDG_DATA_HOME="$runtime_root/data" XDG_STATE_HOME="$runtime_root/state" CODEX_HOME="$runtime_root/codex" CODEX_SQLITE_HOME="$runtime_root/codex/sqlite" && codex --version && node --version && git --version && jq --version && python -c "import flashinfer_bench, modal"'
 
 run_exec \
     "Verify scaffold script" \
-    /bin/bash -lc "rm -rf /tmp/kda-smoke && /app/scaffold.sh /tmp/kda-smoke && test -f /tmp/kda-smoke/TASK_CONTRACT.md && test -f /tmp/kda-smoke/config.toml && test -f /tmp/kda-smoke/solution/triton/kernel.py && test -f /tmp/kda-smoke/scripts/run_local.py && test -f /tmp/kda-smoke/benchmark.csv"
+    /bin/bash -lc "rm -rf /tmp/kda-smoke && /app/scaffold.sh /tmp/kda-smoke && test -f /tmp/kda-smoke/TASK_CONTRACT.md && test -f /tmp/kda-smoke/config.toml && test -f /tmp/kda-smoke/solution/triton/kernel.py && test -f /tmp/kda-smoke/scripts/run_local.py && test -f /tmp/kda-smoke/benchmark.csv && test -f /tmp/kda-smoke/outputs/execution-summary.md"
 
 run_exec \
     "Verify draft runner help" \

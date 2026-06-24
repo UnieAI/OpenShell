@@ -1,7 +1,9 @@
-# Default config for the OpenShell Kernel Design Agents example.
+# Single-workload smoke preset for the OpenShell Kernel Design Agents example.
+# Fixed UUID from the official dataset:
+# - b8f4f012-a32e-4356-b4e1-7665b3d598af -> seq_len=7
 # Keep this file flat: one key/value per line.
 
-workspace: "examples/kernel-design-agents/results/kda-flashinfer-moe-phase1"
+workspace: "examples/kernel-design-agents/results/kda-flashinfer-moe-phase1-w1"
 starter_kit: "examples/kernel-design-agents/starter-kit"
 gpus: "1"
 model: "gpt-5.4-mini"
@@ -9,7 +11,7 @@ reasoning: "low"
 mode: "draft"
 auto_scaffold: true
 force_scaffold: false
-fib_dataset_path: ""
+fib_dataset_path: "examples/kernel-design-agents/mlsys26-contest"
 
 solution_name: "openshell-kda-moe-phase1-v1"
 definition: "moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048"
@@ -22,8 +24,8 @@ binding: "torch"
 benchmark_warmup_runs: "1"
 benchmark_iterations: "3"
 benchmark_num_trials: "1"
-benchmark_workload_limit: "2"
-benchmark_workload_uuids: ""
+benchmark_workload_limit: ""
+benchmark_workload_uuids: "b8f4f012-a32e-4356-b4e1-7665b3d598af"
 
 task_name: "FlashInfer MoE FP8 phase-1 kernel optimization"
 objective: "implement a first correct self-contained CUDA baseline for moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048 and use it as the foundation for later optimization"

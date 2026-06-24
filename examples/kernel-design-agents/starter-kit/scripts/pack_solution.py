@@ -41,8 +41,12 @@ def pack_solution(output_path: Path = None) -> Path:
     language = build_config["language"]
     entry_point = build_config["entry_point"]
 
-    # Determine source directory based on language
-    if language == "triton":
+    source_dir_name = build_config.get("source_dir")
+
+    # Determine source directory based on language unless config.toml overrides it.
+    if source_dir_name:
+        source_dir = PROJECT_ROOT / "solution" / source_dir_name
+    elif language == "triton":
         source_dir = PROJECT_ROOT / "solution" / "triton"
     elif language == "cuda":
         source_dir = PROJECT_ROOT / "solution" / "cuda"
@@ -54,12 +58,16 @@ def pack_solution(output_path: Path = None) -> Path:
 
     # Create build spec
     dps = build_config.get("destination_passing_style", True)
-    spec = BuildSpec(
+    spec_kwargs = dict(
         language=language,
         target_hardware=["cuda"],
         entry_point=entry_point,
         destination_passing_style=dps,
     )
+    binding = build_config.get("binding")
+    if binding:
+        spec_kwargs["binding"] = binding
+    spec = BuildSpec(**spec_kwargs)
 
     # Pack the solution
     solution = pack_solution_from_files(
@@ -80,6 +88,8 @@ def pack_solution(output_path: Path = None) -> Path:
     print(f"  Definition: {solution.definition}")
     print(f"  Author: {solution.author}")
     print(f"  Language: {language}")
+    print(f"  Source dir: {source_dir.relative_to(PROJECT_ROOT)}")
+    print(f"  Binding: {binding or 'default'}")
 
     return output_path
 

@@ -7,24 +7,37 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXAMPLE_DIR="${KDA_EXAMPLE_DIR:-${ROOT}/examples/kernel-design-agents}"
 CONFIG_PATH="${KDA_CONFIG:-${EXAMPLE_DIR}/config/kda-gemm-task.yml}"
-WORKSPACE="${KDA_WORKSPACE:-${EXAMPLE_DIR}/results/kda-flashinfer-task}"
+WORKSPACE="${KDA_WORKSPACE:-${EXAMPLE_DIR}/results/kda-flashinfer-moe-phase1}"
 STARTER_KIT_DIR="${KDA_STARTER_KIT_DIR:-${EXAMPLE_DIR}/starter-kit}"
 GPU_SPEC="${KDA_GPU_SPEC:-1}"
 MODEL="${KDA_CODEX_MODEL:-gpt-5.4-mini}"
 REASONING="${KDA_CODEX_REASONING:-low}"
 IMAGE="${KDA_IMAGE:-openshell-kda-example}"
+MODE="${KDA_MODE:-draft}"
 DOCKER_USER_DEFAULT="$(id -u):$(id -g)"
 DOCKER_USER="${KDA_DOCKER_USER:-${DOCKER_USER_DEFAULT}}"
 HOST_RUNTIME_ROOT="${KDA_HOST_RUNTIME_ROOT:-${TMPDIR:-/tmp}/openshell-kda-runtime}"
+FIB_DATASET_PATH_VALUE="${KDA_FIB_DATASET_PATH:-${FIB_DATASET_PATH:-}}"
+CONTAINER_FIB_DATASET_PATH="${KDA_CONTAINER_FIB_DATASET_PATH:-/datasets/mlsys26-contest}"
 AUTO_SCAFFOLD=1
 FORCE_SCAFFOLD=0
 BUILD_IMAGE=0
+KERNEL_OPTIMIZE=0
+MAX_DEPTH="${KDA_MAX_DEPTH:-1}"
 
 SOLUTION_NAME="${KDA_SOLUTION_NAME:-}"
 DEFINITION="${KDA_DEFINITION:-}"
 AUTHOR="${KDA_AUTHOR:-}"
 LANGUAGE="${KDA_LANGUAGE:-}"
 ENTRY_POINT="${KDA_ENTRY_POINT:-}"
+SOURCE_DIR="${KDA_SOURCE_DIR:-}"
+DESTINATION_PASSING_STYLE="${KDA_DESTINATION_PASSING_STYLE:-}"
+BINDING="${KDA_BINDING:-}"
+BENCHMARK_WARMUP_RUNS="${KDA_BENCHMARK_WARMUP_RUNS:-}"
+BENCHMARK_ITERATIONS="${KDA_BENCHMARK_ITERATIONS:-}"
+BENCHMARK_NUM_TRIALS="${KDA_BENCHMARK_NUM_TRIALS:-}"
+BENCHMARK_WORKLOAD_LIMIT="${KDA_BENCHMARK_WORKLOAD_LIMIT:-}"
+BENCHMARK_WORKLOAD_UUIDS="${KDA_BENCHMARK_WORKLOAD_UUIDS:-}"
 
 TASK_NAME="${KDA_TASK_NAME:-}"
 OBJECTIVE="${KDA_OBJECTIVE:-}"
@@ -46,7 +59,8 @@ Usage: bash examples/kernel-design-agents/optimize.sh [options]
 Single-entry Docker runner for the OpenShell KDA example. It scaffolds a task
 workspace from the vendored FlashInfer starter kit when needed, resolves the
 task contract and `config.toml` from config, then bind-mounts that workspace
-into the example image and runs the draft loop directly against host files.
+into the example image and runs either a draft-only or implementation loop
+directly against host files.
 
 Options:
   --config=<path>         YAML config file. Default: examples/kernel-design-agents/config/kda-gemm-task.yml
@@ -56,16 +70,41 @@ Options:
   --model=<name>          Codex model override.
   --reasoning=<level>     Codex reasoning effort. Default: low
   --image=<tag>           Local Docker image tag. Default: openshell-kda-example
+  --mode=<name>           `draft` or `execute`. Default: draft
+  --execute               Shorthand for `--mode=execute`
   --docker-user=<u:g>     Container user. Default: current host uid:gid
   --host-runtime-root=<p> Host directory for temporary Codex runtime state
+  --fib-dataset-path=<p>  Host path to the FlashInfer Trace dataset. Mounted
+                          read-only into the container and exported as
+                          FIB_DATASET_PATH for execution mode.
   --build                 Build the example image before running.
+  --kernel-optimize       If a validated baseline exists, optimize it for
+                          latency. Otherwise bootstrap a baseline first, then
+                          attempt one optimization candidate in the same run.
+  --max-depth=<n>         Maximum number of optimization candidates to attempt
+                          in this run. Default: 1.
   --no-scaffold           Require an existing workspace and TASK_CONTRACT.md.
-  --force-scaffold        Recreate scaffolded files before the run.
+  --clean-workspace       Recreate scaffolded files before the run.
+  --force-scaffold        Backward-compatible alias for --clean-workspace.
   --solution-name=<text>  Write workspace config.toml automatically.
   --definition=<text>     Write workspace config.toml automatically.
   --author=<text>         Write workspace config.toml automatically.
   --language=<text>       Write workspace config.toml automatically.
   --entry-point=<text>    Write workspace config.toml automatically.
+  --source-dir=<text>     Write workspace config.toml automatically.
+  --destination-passing-style=<bool>
+                          Write workspace config.toml automatically.
+  --binding=<text>        Write workspace config.toml automatically.
+  --benchmark-warmup-runs=<n>
+                          Export reduced benchmark settings into the container.
+  --benchmark-iterations=<n>
+                          Export reduced benchmark settings into the container.
+  --benchmark-num-trials=<n>
+                          Export reduced benchmark settings into the container.
+  --benchmark-workload-limit=<n>
+                          Limit run_local.py to the first N workloads.
+  --benchmark-workload-uuids=<list>
+                          Comma-separated workload UUID subset for run_local.py.
   --task-name=<text>      Fill TASK_CONTRACT.md automatically.
   --objective=<text>      Fill TASK_CONTRACT.md automatically.
   --correctness=<text>    Fill TASK_CONTRACT.md automatically.
@@ -114,6 +153,19 @@ to_abs_path() {
     printf '%s/%s\n' "${ROOT}" "${normalized}"
 }
 
+normalize_mode() {
+    local value="$1"
+    case "${value}" in
+        draft|execute)
+            printf '%s\n' "${value}"
+            ;;
+        *)
+            echo "Unsupported mode: ${value}. Expected draft or execute." >&2
+            exit 2
+            ;;
+    esac
+}
+
 normalize_docker_gpus() {
     local value="$1"
     if [[ "${value}" == nvidia.com/gpu=* ]]; then
@@ -149,16 +201,28 @@ load_simple_yaml_config() {
             model) MODEL="${value}" ;;
             reasoning) REASONING="${value}" ;;
             image) IMAGE="${value}" ;;
+            mode) MODE="${value}" ;;
             docker_user) DOCKER_USER="${value}" ;;
             host_runtime_root) HOST_RUNTIME_ROOT="${value}" ;;
+            fib_dataset_path) FIB_DATASET_PATH_VALUE="${value}" ;;
             auto_scaffold) [[ "${value}" == "false" ]] && AUTO_SCAFFOLD=0 || AUTO_SCAFFOLD=1 ;;
             force_scaffold) [[ "${value}" == "true" ]] && FORCE_SCAFFOLD=1 || FORCE_SCAFFOLD=0 ;;
             build_image) [[ "${value}" == "true" ]] && BUILD_IMAGE=1 || BUILD_IMAGE=0 ;;
+            kernel_optimize) [[ "${value}" == "true" ]] && KERNEL_OPTIMIZE=1 || KERNEL_OPTIMIZE=0 ;;
+            max_depth) MAX_DEPTH="${value}" ;;
             solution_name) SOLUTION_NAME="${value}" ;;
             definition) DEFINITION="${value}" ;;
             author) AUTHOR="${value}" ;;
             language) LANGUAGE="${value}" ;;
             entry_point) ENTRY_POINT="${value}" ;;
+            source_dir) SOURCE_DIR="${value}" ;;
+            destination_passing_style) DESTINATION_PASSING_STYLE="${value}" ;;
+            binding) BINDING="${value}" ;;
+            benchmark_warmup_runs) BENCHMARK_WARMUP_RUNS="${value}" ;;
+            benchmark_iterations) BENCHMARK_ITERATIONS="${value}" ;;
+            benchmark_num_trials) BENCHMARK_NUM_TRIALS="${value}" ;;
+            benchmark_workload_limit) BENCHMARK_WORKLOAD_LIMIT="${value}" ;;
+            benchmark_workload_uuids) BENCHMARK_WORKLOAD_UUIDS="${value}" ;;
             task_name) TASK_NAME="${value}" ;;
             objective) OBJECTIVE="${value}" ;;
             correctness) CORRECTNESS="${value}" ;;
@@ -194,9 +258,47 @@ EOF
 
 write_starter_config_if_requested() {
     local config_path="$1"
+    local source_dir_line=""
+    local dps_line=""
+    local binding_line=""
+    local normalized_entry_point="${ENTRY_POINT:-kernel}"
 
-    if [[ -z "${SOLUTION_NAME}" && -z "${DEFINITION}" && -z "${AUTHOR}" && -z "${LANGUAGE}" && -z "${ENTRY_POINT}" ]]; then
+    if [[ -z "${SOLUTION_NAME}" && -z "${DEFINITION}" && -z "${AUTHOR}" && -z "${LANGUAGE}" && -z "${ENTRY_POINT}" && -z "${SOURCE_DIR}" && -z "${DESTINATION_PASSING_STYLE}" && -z "${BINDING}" ]]; then
         return 0
+    fi
+
+    if [[ -n "${SOURCE_DIR}" ]]; then
+        source_dir_line="source_dir = \"${SOURCE_DIR}\""
+    fi
+    if [[ -n "${DESTINATION_PASSING_STYLE}" ]]; then
+        case "${DESTINATION_PASSING_STYLE}" in
+            true|false)
+                dps_line="destination_passing_style = ${DESTINATION_PASSING_STYLE}"
+                ;;
+            *)
+                echo "Unsupported destination_passing_style: ${DESTINATION_PASSING_STYLE}. Expected true or false." >&2
+                exit 2
+                ;;
+        esac
+    fi
+    if [[ -n "${BINDING}" ]]; then
+        case "${BINDING}" in
+            tvm-ffi|torch)
+                binding_line="binding = \"${BINDING}\""
+                ;;
+            *)
+                echo "Unsupported binding: ${BINDING}. Expected tvm-ffi or torch." >&2
+                exit 2
+                ;;
+        esac
+    fi
+
+    if [[ "${LANGUAGE:-}" == "cuda" && "${BINDING:-}" == "torch" ]]; then
+        case "${normalized_entry_point}" in
+            ""|kernel)
+                normalized_entry_point="kernel.cu::kernel"
+                ;;
+        esac
     fi
 
     cat > "${config_path}" <<EOF
@@ -207,8 +309,44 @@ author = "${AUTHOR:-team-name}"
 
 [build]
 language = "${LANGUAGE:-triton}"
-entry_point = "${ENTRY_POINT:-kernel}"
+entry_point = "${normalized_entry_point}"
+${source_dir_line}
+${dps_line}
+${binding_line}
 EOF
+}
+
+sync_workspace_support_files() {
+    local workspace_path="$1"
+    local starter_path="$2"
+
+    mkdir -p "${workspace_path}/scripts"
+
+    for path in README.md FAQ.md EVALUATION.md; do
+        if [[ -f "${starter_path}/${path}" ]]; then
+            cp "${starter_path}/${path}" "${workspace_path}/${path}"
+        fi
+    done
+
+    for path in check_cuda_extension.py pack_solution.py run_local.py run_modal.py; do
+        if [[ -f "${starter_path}/scripts/${path}" ]]; then
+            cp "${starter_path}/scripts/${path}" "${workspace_path}/scripts/${path}"
+        fi
+    done
+
+    if [[ -d "${starter_path}/images" ]]; then
+        mkdir -p "${workspace_path}/images"
+        cp -R "${starter_path}/images/." "${workspace_path}/images/"
+    fi
+}
+
+rewrite_dataset_placeholders() {
+    local command_text="$1"
+    local dataset_path="$2"
+
+    command_text="${command_text//\/path\/to\/mlsys26-contest/${dataset_path}}"
+    command_text="${command_text//\/path\/to\/flashinfer-trace/${dataset_path}}"
+    printf '%s\n' "${command_text}"
 }
 
 for arg in "$@"; do
@@ -250,19 +388,34 @@ for arg in "$@"; do
         --image=*)
             IMAGE="${arg#--image=}"
             ;;
+        --mode=*)
+            MODE="${arg#--mode=}"
+            ;;
+        --execute)
+            MODE="execute"
+            ;;
         --docker-user=*)
             DOCKER_USER="${arg#--docker-user=}"
             ;;
         --host-runtime-root=*)
             HOST_RUNTIME_ROOT="${arg#--host-runtime-root=}"
             ;;
+        --fib-dataset-path=*)
+            FIB_DATASET_PATH_VALUE="${arg#--fib-dataset-path=}"
+            ;;
         --build)
             BUILD_IMAGE=1
+            ;;
+        --kernel-optimize)
+            KERNEL_OPTIMIZE=1
+            ;;
+        --max-depth=*)
+            MAX_DEPTH="${arg#--max-depth=}"
             ;;
         --no-scaffold)
             AUTO_SCAFFOLD=0
             ;;
-        --force-scaffold)
+        --clean-workspace|--force-scaffold)
             FORCE_SCAFFOLD=1
             ;;
         --solution-name=*)
@@ -279,6 +432,30 @@ for arg in "$@"; do
             ;;
         --entry-point=*)
             ENTRY_POINT="${arg#--entry-point=}"
+            ;;
+        --source-dir=*)
+            SOURCE_DIR="${arg#--source-dir=}"
+            ;;
+        --destination-passing-style=*)
+            DESTINATION_PASSING_STYLE="${arg#--destination-passing-style=}"
+            ;;
+        --binding=*)
+            BINDING="${arg#--binding=}"
+            ;;
+        --benchmark-warmup-runs=*)
+            BENCHMARK_WARMUP_RUNS="${arg#--benchmark-warmup-runs=}"
+            ;;
+        --benchmark-iterations=*)
+            BENCHMARK_ITERATIONS="${arg#--benchmark-iterations=}"
+            ;;
+        --benchmark-num-trials=*)
+            BENCHMARK_NUM_TRIALS="${arg#--benchmark-num-trials=}"
+            ;;
+        --benchmark-workload-limit=*)
+            BENCHMARK_WORKLOAD_LIMIT="${arg#--benchmark-workload-limit=}"
+            ;;
+        --benchmark-workload-uuids=*)
+            BENCHMARK_WORKLOAD_UUIDS="${arg#--benchmark-workload-uuids=}"
             ;;
         --task-name=*)
             TASK_NAME="${arg#--task-name=}"
@@ -319,9 +496,30 @@ done
 WORKSPACE="$(to_abs_path "${WORKSPACE}")"
 STARTER_KIT_DIR="$(to_abs_path "${STARTER_KIT_DIR}")"
 HOST_RUNTIME_ROOT="$(to_abs_path "${HOST_RUNTIME_ROOT}")"
+MODE="$(normalize_mode "${MODE}")"
+
+case "${MAX_DEPTH}" in
+    ''|*[!0-9]*)
+        echo "Unsupported max depth: ${MAX_DEPTH}. Expected a positive integer." >&2
+        exit 2
+        ;;
+    0)
+        echo "Unsupported max depth: 0. Expected a positive integer." >&2
+        exit 2
+        ;;
+esac
+
+if [[ -n "${FIB_DATASET_PATH_VALUE}" ]]; then
+    FIB_DATASET_PATH_VALUE="$(to_abs_path "${FIB_DATASET_PATH_VALUE}")"
+fi
 
 if [[ ! -d "${STARTER_KIT_DIR}" ]]; then
     echo "Starter-kit directory not found: ${STARTER_KIT_DIR}" >&2
+    exit 2
+fi
+
+if [[ -n "${FIB_DATASET_PATH_VALUE}" && ! -d "${FIB_DATASET_PATH_VALUE}" ]]; then
+    echo "FlashInfer dataset directory not found: ${FIB_DATASET_PATH_VALUE}" >&2
     exit 2
 fi
 
@@ -337,6 +535,8 @@ if [[ "${AUTO_SCAFFOLD}" == "1" ]]; then
     fi
 fi
 
+sync_workspace_support_files "${WORKSPACE}" "${STARTER_KIT_DIR}"
+
 if [[ ! -f "${WORKSPACE}/TASK_CONTRACT.md" ]]; then
     echo "Missing TASK_CONTRACT.md: ${WORKSPACE}" >&2
     echo "Either create the workspace first or omit --no-scaffold." >&2
@@ -347,6 +547,10 @@ if [[ ! -f "${WORKSPACE}/config.toml" ]]; then
     echo "Missing starter-kit config.toml: ${WORKSPACE}" >&2
     echo "Either create the workspace from the starter kit or omit --no-scaffold." >&2
     exit 2
+fi
+
+if [[ -n "${FIB_DATASET_PATH_VALUE}" && -n "${EVALUATE}" ]]; then
+    EVALUATE="$(rewrite_dataset_placeholders "${EVALUATE}" "${CONTAINER_FIB_DATASET_PATH}")"
 fi
 
 write_contract_if_requested "${WORKSPACE}/TASK_CONTRACT.md"
@@ -416,6 +620,10 @@ docker_mounts=(
     -v "${RUN_DIR}:${CONTAINER_RUNTIME_ROOT}"
 )
 
+if [[ -n "${FIB_DATASET_PATH_VALUE}" ]]; then
+    docker_mounts+=(-v "${FIB_DATASET_PATH_VALUE}:${CONTAINER_FIB_DATASET_PATH}:ro")
+fi
+
 docker_env=(
     -e HOME="${CONTAINER_RUNTIME_ROOT}/home"
     -e TMPDIR="${CONTAINER_RUNTIME_ROOT}/tmp"
@@ -428,7 +636,33 @@ docker_env=(
     -e CODEX_HOME="${CONTAINER_RUNTIME_ROOT}/codex"
     -e CODEX_SQLITE_HOME="${CONTAINER_RUNTIME_ROOT}/codex/sqlite"
     -e KDA_CODEX_RUNTIME_ROOT="${CONTAINER_RUNTIME_ROOT}"
+    -e KDA_EXECUTION_MODE="${MODE}"
+    -e KDA_KERNEL_OPTIMIZE="${KERNEL_OPTIMIZE}"
+    -e KDA_MAX_DEPTH="${MAX_DEPTH}"
+    -e KDA_RUN_LOCAL_LOG_PATH="${CONTAINER_WORKSPACE}/runs/run_local.txt"
+    -e KDA_RUN_LOCAL_RESULTS_PATH="${CONTAINER_WORKSPACE}/runs/run_local_results.json"
+    -e KDA_CUDA_EXTENSION_LOG_PATH="${CONTAINER_WORKSPACE}/runs/check_cuda_extension.txt"
 )
+
+if [[ -n "${FIB_DATASET_PATH_VALUE}" ]]; then
+    docker_env+=(-e FIB_DATASET_PATH="${CONTAINER_FIB_DATASET_PATH}")
+fi
+
+if [[ -n "${BENCHMARK_WARMUP_RUNS}" ]]; then
+    docker_env+=(-e KDA_BENCHMARK_WARMUP_RUNS="${BENCHMARK_WARMUP_RUNS}")
+fi
+if [[ -n "${BENCHMARK_ITERATIONS}" ]]; then
+    docker_env+=(-e KDA_BENCHMARK_ITERATIONS="${BENCHMARK_ITERATIONS}")
+fi
+if [[ -n "${BENCHMARK_NUM_TRIALS}" ]]; then
+    docker_env+=(-e KDA_BENCHMARK_NUM_TRIALS="${BENCHMARK_NUM_TRIALS}")
+fi
+if [[ -n "${BENCHMARK_WORKLOAD_LIMIT}" ]]; then
+    docker_env+=(-e KDA_BENCHMARK_WORKLOAD_LIMIT="${BENCHMARK_WORKLOAD_LIMIT}")
+fi
+if [[ -n "${BENCHMARK_WORKLOAD_UUIDS}" ]]; then
+    docker_env+=(-e KDA_BENCHMARK_WORKLOAD_UUIDS="${BENCHMARK_WORKLOAD_UUIDS}")
+fi
 
 if [[ "${AUTH_MODE}" == "api-key" ]]; then
     docker_env+=(
@@ -450,10 +684,26 @@ echo "  Starter kit: ${STARTER_KIT_DIR}"
 echo "  Workspace: ${ABS_WORKSPACE}"
 echo "  Model: ${MODEL}"
 echo "  Reasoning: ${REASONING}"
+echo "  Mode: ${MODE}"
+echo "  Kernel optimize: ${KERNEL_OPTIMIZE}"
+echo "  Max depth: ${MAX_DEPTH}"
 echo "  Image: ${IMAGE}"
 echo "  Docker user: ${DOCKER_USER}"
 echo "  Docker GPUs: ${DOCKER_GPUS}"
 echo "  Auth mode: ${AUTH_MODE}"
+if [[ -n "${FIB_DATASET_PATH_VALUE}" ]]; then
+    echo "  Dataset: ${FIB_DATASET_PATH_VALUE} -> ${CONTAINER_FIB_DATASET_PATH}"
+elif [[ "${MODE}" == "execute" ]]; then
+    echo "  Dataset: not set (evaluation may be skipped or reported as blocked)"
+fi
+if [[ -n "${BENCHMARK_WORKLOAD_UUIDS}" ]]; then
+    echo "  Benchmark workloads: ${BENCHMARK_WORKLOAD_UUIDS}"
+elif [[ -n "${BENCHMARK_WORKLOAD_LIMIT}" ]]; then
+    echo "  Benchmark workload limit: ${BENCHMARK_WORKLOAD_LIMIT}"
+fi
+if [[ -n "${BENCHMARK_WARMUP_RUNS}${BENCHMARK_ITERATIONS}${BENCHMARK_NUM_TRIALS}" ]]; then
+    echo "  Benchmark config: warmup=${BENCHMARK_WARMUP_RUNS:-default} iterations=${BENCHMARK_ITERATIONS:-default} trials=${BENCHMARK_NUM_TRIALS:-default}"
+fi
 
 docker run --rm \
     --gpus "${DOCKER_GPUS}" \
@@ -466,10 +716,15 @@ docker run --rm \
     --workspace "${CONTAINER_WORKSPACE}" \
     --model "${MODEL}" \
     --reasoning "${REASONING}" \
+    --mode "${MODE}" \
     --runtime-root "${CONTAINER_RUNTIME_ROOT}"
 
 echo
-echo "KDA draft completed."
+echo "KDA ${MODE} run completed."
 echo "Workspace: ${ABS_WORKSPACE}"
 echo "Draft: ${ABS_WORKSPACE}/docs/draft.md"
+if [[ "${MODE}" == "execute" ]]; then
+    echo "Plan: ${ABS_WORKSPACE}/docs/plan.md"
+    echo "Execution summary: ${ABS_WORKSPACE}/outputs/execution-summary.md"
+fi
 echo "Last message: ${ABS_WORKSPACE}/outputs/last-message.md"

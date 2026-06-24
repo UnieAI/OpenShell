@@ -87,7 +87,7 @@ cat > "${TARGET}/TASK_CONTRACT.md" <<'EOF'
 - Objective: <fill in the user-facing goal>
 - Correctness requirements: <fill in required behavior, tolerances, or invariants>
 - Performance or quality target: <fill in measurable target if any>
-- Allowed implementation approaches: <fill in languages, libraries, APIs, or constraints>
+- Allowed implementation approaches: <fill in languages, libraries, APIs, and submission constraints such as self-contained sources only>
 - Validation command: <fill in the command that proves correctness>
 - Evaluation command: <fill in the command that measures the target, if different>
 - Promotion criteria: <fill in what must be true before a candidate is accepted>
@@ -104,6 +104,12 @@ cat > "${TARGET}/docs/plan.md" <<'EOF'
 # Executable Plan
 
 Convert `docs/draft.md` into an executable plan before implementation starts.
+EOF
+
+cat > "${TARGET}/outputs/execution-summary.md" <<'EOF'
+# Execution Summary
+
+The agent updates this file after implementation, validation, and optional evaluation.
 EOF
 
 cat > "${TARGET}/benchmark.csv" <<'EOF'

@@ -15,6 +15,7 @@ KEEP_SANDBOX=0
 GPU_DEVICE="${KDA_GPU_DEVICE:-}"
 MODEL="${KDA_CODEX_MODEL:-gpt-5.4-mini}"
 REASONING="${KDA_CODEX_REASONING:-low}"
+MODE="${KDA_MODE:-draft}"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openshell-kda-plan.XXXXXX")"
 OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-}"
 CODEX_API_KEY_VALUE="${CODEX_API_KEY:-}"
@@ -33,6 +34,7 @@ Options:
   --name=<name>       Override sandbox name.
   --model=<name>      Codex model override.
   --reasoning=<lvl>   Codex reasoning effort. Default: low
+  --mode=<name>       `draft` or `execute`. Default: draft
   --keep              Preserve the sandbox and provider after the run.
   -h, --help          Show this help.
 EOF
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             REASONING="${1#--reasoning=}"
             shift
             ;;
+        --mode=*)
+            MODE="${1#--mode=}"
+            shift
+            ;;
         --keep)
             KEEP_SANDBOX=1
             shift
@@ -84,6 +90,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+case "${MODE}" in
+    draft|execute)
+        ;;
+    *)
+        echo "Unsupported mode: ${MODE}. Expected draft or execute." >&2
+        exit 2
+        ;;
+esac
 
 cleanup() {
     local status=$?
@@ -212,19 +227,24 @@ mkdir -p "${DOWNLOAD_ROOT}"
 echo "Uploading workspace to sandbox: ${REMOTE_WORKSPACE}"
 "${OPENSHELL_BIN}" sandbox upload "${SANDBOX_NAME}" "${WORKSPACE}" "${REMOTE_WORKSPACE_PARENT}"
 
-echo "Running KDA draft loop in sandbox"
+echo "Running KDA ${MODE} loop in sandbox"
 "${OPENSHELL_BIN}" sandbox exec -n "${SANDBOX_NAME}" -- \
     /bin/bash /app/scripts/run-kda-draft.sh \
     --workspace "${REMOTE_WORKSPACE}" \
     --model "${MODEL}" \
-    --reasoning "${REASONING}"
+    --reasoning "${REASONING}" \
+    --mode "${MODE}"
 
 echo "Downloading updated workspace back to host"
 "${OPENSHELL_BIN}" sandbox download "${SANDBOX_NAME}" "${REMOTE_WORKSPACE}" "${DOWNLOAD_ROOT}"
 cp -R "${DOWNLOAD_ROOT}/$(basename "${WORKSPACE}")/." "${WORKSPACE}/"
 
 echo
-echo "KDA draft completed."
+echo "KDA ${MODE} run completed."
 echo "Workspace: ${WORKSPACE}"
 echo "Draft: ${WORKSPACE}/docs/draft.md"
+if [[ "${MODE}" == "execute" ]]; then
+    echo "Plan: ${WORKSPACE}/docs/plan.md"
+    echo "Execution summary: ${WORKSPACE}/outputs/execution-summary.md"
+fi
 echo "Last message: ${WORKSPACE}/outputs/last-message.md"
