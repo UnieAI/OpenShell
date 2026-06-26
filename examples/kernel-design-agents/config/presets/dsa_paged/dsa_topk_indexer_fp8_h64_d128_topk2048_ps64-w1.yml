@@ -1,0 +1,43 @@
+# Generic definition-centric preset.
+# Family: dsa_paged
+# Definition: dsa_topk_indexer_fp8_h64_d128_topk2048_ps64
+# Profile: w1 (single-workload smoke test)
+# Fixed UUID:
+# - 30cecff1-7ea4-474b-90fc-7f4a87206d8e -> batch_size=1, max_num_pages=1, num_pages=11923
+# Keep this file flat: one key/value per line.
+
+preset_name: "dsa_topk_indexer_fp8_h64_d128_topk2048_ps64-w1"
+task_family: "dsa_paged"
+workload_profile: "w1"
+workspace: "examples/kernel-design-agents/results/kda-dsa_topk_indexer_fp8_h64_d128_topk2048_ps64-w1"
+starter_kit: "examples/kernel-design-agents/starter-kit"
+gpus: "1"
+model: "gpt-5.4-mini"
+reasoning: "low"
+mode: "draft"
+auto_scaffold: true
+force_scaffold: false
+fib_dataset_path: "examples/kernel-design-agents/mlsys26-contest"
+
+solution_name: "openshell-kda-dsa-topk-indexer-v1"
+definition: "dsa_topk_indexer_fp8_h64_d128_topk2048_ps64"
+author: "openshell"
+language: "cuda"
+entry_point: "kernel.cu::kernel"
+source_dir: "cuda"
+destination_passing_style: false
+binding: "torch"
+benchmark_warmup_runs: "1"
+benchmark_iterations: "3"
+benchmark_num_trials: "1"
+benchmark_workload_limit: ""
+benchmark_workload_uuids: "30cecff1-7ea4-474b-90fc-7f4a87206d8e"
+
+task_name: "FlashInfer DSA top-k indexer kernel optimization"
+objective: "implement a correct self-contained CUDA candidate for dsa_topk_indexer_fp8_h64_d128_topk2048_ps64 and use the validated baseline as the starting point for later optimization"
+correctness: "solution.json packs successfully; the implementation remains self-contained under solution/; local benchmark results remain numerically valid for the selected definition using the official DSA top-k-indexer tolerance profile"
+target: "establish a correct baseline candidate for the exact DSA top-k-indexer definition, then reduce latency on the selected workload profile without correctness regressions"
+allowed: "edit files inside this workspace only; implement the submission under solution/cuda/; keep sources self-contained; do not call flashinfer, deep_gemm, or similar specialized kernel libraries at runtime; use dataset definitions and baseline solutions as references only"
+validate: "python scripts/pack_solution.py"
+evaluate: "FIB_DATASET_PATH=/path/to/mlsys26-contest python scripts/run_local.py --log-file runs/run_local.txt --results-json runs/run_local_results.json"
+promote: "the candidate packs successfully, passes any applicable CUDA compile smoke, and benchmark evidence shows correctness on the configured workload profile before any broader evaluation sweep"

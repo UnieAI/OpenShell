@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXAMPLE_DIR="${KDA_EXAMPLE_DIR:-${ROOT}/examples/kernel-design-agents}"
 CONFIG_PATH="${KDA_CONFIG:-${EXAMPLE_DIR}/config/kda-gemm-task.yml}"
-WORKSPACE="${KDA_WORKSPACE:-${EXAMPLE_DIR}/results/kda-flashinfer-moe-phase1}"
+WORKSPACE="${KDA_WORKSPACE:-${EXAMPLE_DIR}/results/kda-task}"
 STARTER_KIT_DIR="${KDA_STARTER_KIT_DIR:-${EXAMPLE_DIR}/starter-kit}"
 GPU_SPEC="${KDA_GPU_SPEC:-1}"
 MODEL="${KDA_CODEX_MODEL:-gpt-5.4-mini}"
@@ -21,9 +21,11 @@ FIB_DATASET_PATH_VALUE="${KDA_FIB_DATASET_PATH:-${FIB_DATASET_PATH:-}}"
 CONTAINER_FIB_DATASET_PATH="${KDA_CONTAINER_FIB_DATASET_PATH:-/datasets/mlsys26-contest}"
 AUTO_SCAFFOLD=1
 FORCE_SCAFFOLD=0
+SCAFFOLDED_WORKSPACE=0
 BUILD_IMAGE=0
 KERNEL_OPTIMIZE=0
 MAX_DEPTH="${KDA_MAX_DEPTH:-1}"
+BRANCH="${KDA_BRANCH:-1}"
 
 SOLUTION_NAME="${KDA_SOLUTION_NAME:-}"
 DEFINITION="${KDA_DEFINITION:-}"
@@ -38,6 +40,9 @@ BENCHMARK_ITERATIONS="${KDA_BENCHMARK_ITERATIONS:-}"
 BENCHMARK_NUM_TRIALS="${KDA_BENCHMARK_NUM_TRIALS:-}"
 BENCHMARK_WORKLOAD_LIMIT="${KDA_BENCHMARK_WORKLOAD_LIMIT:-}"
 BENCHMARK_WORKLOAD_UUIDS="${KDA_BENCHMARK_WORKLOAD_UUIDS:-}"
+PRESET_NAME="${KDA_PRESET_NAME:-}"
+TASK_FAMILY="${KDA_TASK_FAMILY:-}"
+WORKLOAD_PROFILE="${KDA_WORKLOAD_PROFILE:-}"
 
 TASK_NAME="${KDA_TASK_NAME:-}"
 OBJECTIVE="${KDA_OBJECTIVE:-}"
@@ -59,8 +64,8 @@ Usage: bash examples/kernel-design-agents/optimize.sh [options]
 Single-entry Docker runner for the OpenShell KDA example. It scaffolds a task
 workspace from the vendored FlashInfer starter kit when needed, resolves the
 task contract and `config.toml` from config, then bind-mounts that workspace
-into the example image and runs either a draft-only or implementation loop
-directly against host files.
+into the example image and runs one of three flows directly against host files:
+draft-only, single baseline smoke execute, or execute plus kernel optimization.
 
 Options:
   --config=<path>         YAML config file. Default: examples/kernel-design-agents/config/kda-gemm-task.yml
@@ -78,11 +83,16 @@ Options:
                           read-only into the container and exported as
                           FIB_DATASET_PATH for execution mode.
   --build                 Build the example image before running.
-  --kernel-optimize       If a validated baseline exists, optimize it for
-                          latency. Otherwise bootstrap a baseline first, then
-                          attempt one optimization candidate in the same run.
-  --max-depth=<n>         Maximum number of optimization candidates to attempt
+  --kernel-optimize       Enable the optimization flow. Without this flag,
+                          `--mode=execute` only runs one baseline smoke /
+                          baseline revalidation attempt. With this flag,
+                          use the current source candidate if one exists;
+                          otherwise bootstrap a baseline first, then enter
+                          the depth/branch optimization loop.
+  --max-depth=<n>         Maximum number of promoted depth levels to pursue
                           in this run. Default: 1.
+  --branch=<n>            Maximum number of new attempts per baseline/depth
+                          level in this run. Default: 1.
   --no-scaffold           Require an existing workspace and TASK_CONTRACT.md.
   --clean-workspace       Recreate scaffolded files before the run.
   --force-scaffold        Backward-compatible alias for --clean-workspace.
@@ -179,6 +189,32 @@ normalize_docker_gpus() {
     printf 'device=%s\n' "${value}"
 }
 
+read_workspace_definition() {
+    local config_path="$1"
+
+    [[ -f "${config_path}" ]] || return 0
+
+    python3 - "${config_path}" <<'PY'
+import pathlib
+import sys
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
+path = pathlib.Path(sys.argv[1])
+try:
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+definition = data.get("solution", {}).get("definition", "")
+if isinstance(definition, str) and definition.strip():
+    print(definition.strip())
+PY
+}
+
 load_simple_yaml_config() {
     local path="$1"
     local line key value
@@ -210,6 +246,7 @@ load_simple_yaml_config() {
             build_image) [[ "${value}" == "true" ]] && BUILD_IMAGE=1 || BUILD_IMAGE=0 ;;
             kernel_optimize) [[ "${value}" == "true" ]] && KERNEL_OPTIMIZE=1 || KERNEL_OPTIMIZE=0 ;;
             max_depth) MAX_DEPTH="${value}" ;;
+            branch) BRANCH="${value}" ;;
             solution_name) SOLUTION_NAME="${value}" ;;
             definition) DEFINITION="${value}" ;;
             author) AUTHOR="${value}" ;;
@@ -223,6 +260,9 @@ load_simple_yaml_config() {
             benchmark_num_trials) BENCHMARK_NUM_TRIALS="${value}" ;;
             benchmark_workload_limit) BENCHMARK_WORKLOAD_LIMIT="${value}" ;;
             benchmark_workload_uuids) BENCHMARK_WORKLOAD_UUIDS="${value}" ;;
+            preset_name) PRESET_NAME="${value}" ;;
+            task_family) TASK_FAMILY="${value}" ;;
+            workload_profile) WORKLOAD_PROFILE="${value}" ;;
             task_name) TASK_NAME="${value}" ;;
             objective) OBJECTIVE="${value}" ;;
             correctness) CORRECTNESS="${value}" ;;
@@ -303,9 +343,9 @@ write_starter_config_if_requested() {
 
     cat > "${config_path}" <<EOF
 [solution]
-name = "${SOLUTION_NAME:-my-team-solution-v1}"
-definition = "${DEFINITION:-fused_moe}"
-author = "${AUTHOR:-team-name}"
+name = "${SOLUTION_NAME:-openshell-kda-solution-v1}"
+definition = "${DEFINITION:-kernel_task}"
+author = "${AUTHOR:-openshell}"
 
 [build]
 language = "${LANGUAGE:-triton}"
@@ -340,12 +380,246 @@ sync_workspace_support_files() {
     fi
 }
 
+seed_definition_solution_if_available() {
+    local workspace_path="$1"
+    local example_root="$2"
+    local definition_name="$3"
+    local force_seed="${4:-0}"
+    local template_root="${example_root}/definition-templates/${definition_name}"
+    local starter_kernel="${example_root}/starter-kit/solution/cuda/kernel.cu"
+    local workspace_kernel="${workspace_path}/solution/cuda/kernel.cu"
+
+    if [[ -z "${definition_name}" || ! -d "${template_root}" ]]; then
+        return 0
+    fi
+
+    if [[ "${force_seed}" != "1" ]]; then
+        if [[ ! -f "${workspace_kernel}" ]]; then
+            force_seed=1
+        elif [[ -f "${starter_kernel}" ]] && cmp -s "${workspace_kernel}" "${starter_kernel}"; then
+            force_seed=1
+        elif grep -q "CUDA Kernel Template for FlashInfer Competition" "${workspace_kernel}" 2>/dev/null; then
+            force_seed=1
+        fi
+    fi
+
+    if [[ "${force_seed}" != "1" ]]; then
+        return 0
+    fi
+
+    while IFS= read -r template_file; do
+        local rel_path="${template_file#"${template_root}/"}"
+        local target_path="${workspace_path}/${rel_path}"
+        mkdir -p "$(dirname "${target_path}")"
+        cp "${template_file}" "${target_path}"
+    done < <(find "${template_root}" -type f | sort)
+}
+
+write_task_context_if_available() {
+    local workspace_path="$1"
+    local dataset_path="$2"
+    local definition_name="$3"
+    local workload_uuids="$4"
+    local context_path="${workspace_path}/docs/task-context.md"
+
+    if [[ -z "${dataset_path}" || -z "${definition_name}" || ! -d "${dataset_path}" ]]; then
+        return 0
+    fi
+
+    python3 - "${dataset_path}" "${definition_name}" "${workload_uuids}" "${context_path}" <<'PY'
+import json
+import pathlib
+import sys
+
+dataset_root = pathlib.Path(sys.argv[1])
+definition_name = sys.argv[2]
+requested_uuids = [item.strip() for item in sys.argv[3].split(",") if item.strip()]
+output_path = pathlib.Path(sys.argv[4])
+
+
+def find_definition(root: pathlib.Path, name: str):
+    matches = list(root.glob(f"definitions/*/{name}.json"))
+    return matches[0] if matches else None
+
+
+def find_workload_file(root: pathlib.Path, name: str):
+    matches = list(root.glob(f"workloads/*/{name}.jsonl"))
+    return matches[0] if matches else None
+
+
+def find_baseline_solution(root: pathlib.Path, name: str):
+    matches = list(root.glob(f"solutions/baseline/*/{name}/*.json"))
+    return matches[0] if matches else None
+
+
+def shorten(text: str, limit: int = 1600) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+definition_path = find_definition(dataset_root, definition_name)
+workload_path = find_workload_file(dataset_root, definition_name)
+baseline_path = find_baseline_solution(dataset_root, definition_name)
+
+if definition_path is None or workload_path is None:
+    raise SystemExit(0)
+
+definition = json.load(open(definition_path, encoding="utf-8"))
+workloads = [json.loads(line) for line in open(workload_path, encoding="utf-8")]
+selected = []
+if requested_uuids:
+    wanted = set(requested_uuids)
+    for row in workloads:
+        uuid = row.get("uuid") or row.get("workload", {}).get("uuid")
+        if uuid in wanted:
+            selected.append(row)
+else:
+    selected = workloads[:1]
+
+lines = []
+lines.append("# Task Context")
+lines.append("")
+lines.append("This file is generated from the local MLSys26 dataset for the active definition.")
+lines.append("Use it as the first source for task semantics, selected workloads, and baseline context before exploring library internals.")
+lines.append("")
+lines.append("## Definition")
+lines.append("")
+lines.append(f"- Definition: `{definition.get('name', definition_name)}`")
+lines.append(f"- Family: `{definition_path.parent.name}`")
+lines.append(f"- op_type: `{definition.get('op_type', '<unknown>')}`")
+
+axes = definition.get("axes", {})
+if axes:
+    lines.append("- Axes:")
+    for key, spec in axes.items():
+        axis_type = spec.get("type", "<unknown>")
+        desc = spec.get("description", "")
+        value = spec.get("value")
+        suffix = f", value={value}" if value is not None else ""
+        lines.append(f"  - `{key}`: type={axis_type}{suffix}; {desc}".rstrip())
+
+inputs = definition.get("inputs", {})
+if inputs:
+    lines.append("- Inputs:")
+    for key, spec in inputs.items():
+        shape = spec.get("shape")
+        dtype = spec.get("dtype", "<unknown>")
+        desc = spec.get("description", "")
+        lines.append(f"  - `{key}`: dtype={dtype}, shape={shape}; {desc}".rstrip())
+
+outputs = definition.get("outputs", {})
+if outputs:
+    lines.append("- Outputs:")
+    for key, spec in outputs.items():
+        shape = spec.get("shape")
+        dtype = spec.get("dtype", "<unknown>")
+        desc = spec.get("description", "")
+        lines.append(f"  - `{key}`: dtype={dtype}, shape={shape}; {desc}".rstrip())
+
+reference = definition.get("reference")
+if isinstance(reference, str) and reference.strip():
+    lines.append("")
+    lines.append("## Reference Summary")
+    lines.append("")
+    lines.append("```python")
+    lines.append(shorten(reference, 2200))
+    lines.append("```")
+
+lines.append("")
+lines.append("## Selected Workloads")
+lines.append("")
+if selected:
+    for row in selected:
+        workload = row.get("workload", row)
+        uuid = workload.get("uuid", "<unknown>")
+        axes_map = workload.get("axes", {})
+        lines.append(f"- UUID: `{uuid}`")
+        if axes_map:
+            lines.append(f"  - Axes: `{json.dumps(axes_map, sort_keys=True)}`")
+        inputs_map = workload.get("inputs", {})
+        if inputs_map:
+            summarized = {}
+            for key, value in inputs_map.items():
+                if isinstance(value, dict):
+                    summarized[key] = {k: value[k] for k in value if k in {'type', 'path', 'tensor_key', 'value'}}
+                else:
+                    summarized[key] = value
+            lines.append(f"  - Inputs: `{json.dumps(summarized, sort_keys=True)}`")
+else:
+    lines.append("- No matching workloads were found for the configured UUID subset.")
+
+if baseline_path is not None:
+    baseline = json.load(open(baseline_path, encoding="utf-8"))
+    lines.append("")
+    lines.append("## Baseline Solution")
+    lines.append("")
+    lines.append(f"- File: `{baseline_path.relative_to(dataset_root)}`")
+    lines.append(f"- Name: `{baseline.get('name', '<unknown>')}`")
+    lines.append(f"- Author: `{baseline.get('author', '<unknown>')}`")
+    description = baseline.get("description")
+    if description:
+        lines.append(f"- Description: {description}")
+    sources = baseline.get("sources", [])
+    if sources:
+        lines.append("- Sources:")
+        for source in sources:
+            path = source.get("path") or source.get("filename") or source.get("name") or "<unknown>"
+            lines.append(f"  - `{path}`")
+        primary = sources[0].get("content")
+        if isinstance(primary, str) and primary.strip():
+            lines.append("")
+            lines.append("```python")
+            lines.append(shorten(primary, 2200))
+            lines.append("```")
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
 rewrite_dataset_placeholders() {
     local command_text="$1"
     local dataset_path="$2"
 
     command_text="${command_text//\/path\/to\/mlsys26-contest/${dataset_path}}"
     command_text="${command_text//\/path\/to\/flashinfer-trace/${dataset_path}}"
+    printf '%s\n' "${command_text}"
+}
+
+normalize_validation_command() {
+    local command_text="$1"
+
+    if [[ -z "${command_text}" ]]; then
+        printf '%s\n' "${command_text}"
+        return 0
+    fi
+
+    if [[ "${command_text}" == *"check_cuda_extension.py"* && "${command_text}" != *"--log-file"* ]]; then
+        command_text="${command_text} --log-file runs/check_cuda_extension.txt"
+    fi
+
+    printf '%s\n' "${command_text}"
+}
+
+normalize_evaluation_command() {
+    local command_text="$1"
+
+    if [[ -z "${command_text}" ]]; then
+        printf '%s\n' "${command_text}"
+        return 0
+    fi
+
+    if [[ "${command_text}" == *"run_local.py"* ]]; then
+        if [[ "${command_text}" != *"--log-file"* ]]; then
+            command_text="${command_text} --log-file runs/run_local.txt"
+        fi
+        if [[ "${command_text}" != *"--results-json"* ]]; then
+            command_text="${command_text} --results-json runs/run_local_results.json"
+        fi
+    fi
+
     printf '%s\n' "${command_text}"
 }
 
@@ -411,6 +685,9 @@ for arg in "$@"; do
             ;;
         --max-depth=*)
             MAX_DEPTH="${arg#--max-depth=}"
+            ;;
+        --branch=*)
+            BRANCH="${arg#--branch=}"
             ;;
         --no-scaffold)
             AUTO_SCAFFOLD=0
@@ -509,6 +786,17 @@ case "${MAX_DEPTH}" in
         ;;
 esac
 
+case "${BRANCH}" in
+    ''|*[!0-9]*)
+        echo "Unsupported branch count: ${BRANCH}. Expected a positive integer." >&2
+        exit 2
+        ;;
+    0)
+        echo "Unsupported branch count: 0. Expected a positive integer." >&2
+        exit 2
+        ;;
+esac
+
 if [[ -n "${FIB_DATASET_PATH_VALUE}" ]]; then
     FIB_DATASET_PATH_VALUE="$(to_abs_path "${FIB_DATASET_PATH_VALUE}")"
 fi
@@ -519,8 +807,12 @@ if [[ ! -d "${STARTER_KIT_DIR}" ]]; then
 fi
 
 if [[ -n "${FIB_DATASET_PATH_VALUE}" && ! -d "${FIB_DATASET_PATH_VALUE}" ]]; then
-    echo "FlashInfer dataset directory not found: ${FIB_DATASET_PATH_VALUE}" >&2
-    exit 2
+    if [[ "${MODE}" == "execute" ]]; then
+        echo "FlashInfer dataset directory not found: ${FIB_DATASET_PATH_VALUE}" >&2
+        exit 2
+    fi
+    echo "Warning: dataset directory not found for draft mode; continuing without dataset mount: ${FIB_DATASET_PATH_VALUE}" >&2
+    FIB_DATASET_PATH_VALUE=""
 fi
 
 if [[ "${AUTO_SCAFFOLD}" == "1" ]]; then
@@ -532,10 +824,16 @@ if [[ "${AUTO_SCAFFOLD}" == "1" ]]; then
         scaffold_cmd+=(--template="${STARTER_KIT_DIR}" "${WORKSPACE}")
         mkdir -p "$(dirname "${WORKSPACE}")"
         "${scaffold_cmd[@]}"
+        SCAFFOLDED_WORKSPACE=1
     fi
 fi
 
 sync_workspace_support_files "${WORKSPACE}" "${STARTER_KIT_DIR}"
+ACTIVE_DEFINITION_FOR_SETUP="${DEFINITION}"
+if [[ -z "${ACTIVE_DEFINITION_FOR_SETUP}" ]]; then
+    ACTIVE_DEFINITION_FOR_SETUP="$(read_workspace_definition "${WORKSPACE}/config.toml" || true)"
+fi
+seed_definition_solution_if_available "${WORKSPACE}" "${EXAMPLE_DIR}" "${ACTIVE_DEFINITION_FOR_SETUP}" "$(( FORCE_SCAFFOLD == 1 || SCAFFOLDED_WORKSPACE == 1 ))"
 
 if [[ ! -f "${WORKSPACE}/TASK_CONTRACT.md" ]]; then
     echo "Missing TASK_CONTRACT.md: ${WORKSPACE}" >&2
@@ -552,9 +850,16 @@ fi
 if [[ -n "${FIB_DATASET_PATH_VALUE}" && -n "${EVALUATE}" ]]; then
     EVALUATE="$(rewrite_dataset_placeholders "${EVALUATE}" "${CONTAINER_FIB_DATASET_PATH}")"
 fi
+VALIDATE="$(normalize_validation_command "${VALIDATE}")"
+EVALUATE="$(normalize_evaluation_command "${EVALUATE}")"
 
 write_contract_if_requested "${WORKSPACE}/TASK_CONTRACT.md"
 write_starter_config_if_requested "${WORKSPACE}/config.toml"
+ACTIVE_DEFINITION_FOR_SETUP="${DEFINITION}"
+if [[ -z "${ACTIVE_DEFINITION_FOR_SETUP}" ]]; then
+    ACTIVE_DEFINITION_FOR_SETUP="$(read_workspace_definition "${WORKSPACE}/config.toml" || true)"
+fi
+write_task_context_if_available "${WORKSPACE}" "${FIB_DATASET_PATH_VALUE}" "${ACTIVE_DEFINITION_FOR_SETUP}" "${BENCHMARK_WORKLOAD_UUIDS}"
 
 if [[ -n "${OPENAI_API_KEY_VALUE}" && -n "${CODEX_API_KEY_VALUE}" ]]; then
     echo "Set only one of OPENAI_API_KEY or CODEX_API_KEY before running optimize.sh." >&2
@@ -639,9 +944,7 @@ docker_env=(
     -e KDA_EXECUTION_MODE="${MODE}"
     -e KDA_KERNEL_OPTIMIZE="${KERNEL_OPTIMIZE}"
     -e KDA_MAX_DEPTH="${MAX_DEPTH}"
-    -e KDA_RUN_LOCAL_LOG_PATH="${CONTAINER_WORKSPACE}/runs/run_local.txt"
-    -e KDA_RUN_LOCAL_RESULTS_PATH="${CONTAINER_WORKSPACE}/runs/run_local_results.json"
-    -e KDA_CUDA_EXTENSION_LOG_PATH="${CONTAINER_WORKSPACE}/runs/check_cuda_extension.txt"
+    -e KDA_BRANCH="${BRANCH}"
 )
 
 if [[ -n "${FIB_DATASET_PATH_VALUE}" ]]; then
@@ -680,6 +983,15 @@ fi
 
 echo "Running KDA optimize entrypoint"
 echo "  Config: ${CONFIG_PATH}"
+if [[ -n "${PRESET_NAME}" ]]; then
+    echo "  Preset: ${PRESET_NAME}"
+fi
+if [[ -n "${TASK_FAMILY}" ]]; then
+    echo "  Task family: ${TASK_FAMILY}"
+fi
+if [[ -n "${DEFINITION}" ]]; then
+    echo "  Definition: ${DEFINITION}"
+fi
 echo "  Starter kit: ${STARTER_KIT_DIR}"
 echo "  Workspace: ${ABS_WORKSPACE}"
 echo "  Model: ${MODEL}"
@@ -687,19 +999,28 @@ echo "  Reasoning: ${REASONING}"
 echo "  Mode: ${MODE}"
 echo "  Kernel optimize: ${KERNEL_OPTIMIZE}"
 echo "  Max depth: ${MAX_DEPTH}"
+echo "  Branch: ${BRANCH}"
 echo "  Image: ${IMAGE}"
 echo "  Docker user: ${DOCKER_USER}"
 echo "  Docker GPUs: ${DOCKER_GPUS}"
 echo "  Auth mode: ${AUTH_MODE}"
+if [[ -n "${LANGUAGE}${ENTRY_POINT}${SOURCE_DIR}${BINDING}" ]]; then
+    echo "  Build: language=${LANGUAGE:-default} entry_point=${ENTRY_POINT:-default} source_dir=${SOURCE_DIR:-default} binding=${BINDING:-default}"
+fi
 if [[ -n "${FIB_DATASET_PATH_VALUE}" ]]; then
     echo "  Dataset: ${FIB_DATASET_PATH_VALUE} -> ${CONTAINER_FIB_DATASET_PATH}"
 elif [[ "${MODE}" == "execute" ]]; then
     echo "  Dataset: not set (evaluation may be skipped or reported as blocked)"
 fi
+if [[ -n "${WORKLOAD_PROFILE}" ]]; then
+    echo "  Workload profile: ${WORKLOAD_PROFILE}"
+fi
 if [[ -n "${BENCHMARK_WORKLOAD_UUIDS}" ]]; then
     echo "  Benchmark workloads: ${BENCHMARK_WORKLOAD_UUIDS}"
 elif [[ -n "${BENCHMARK_WORKLOAD_LIMIT}" ]]; then
     echo "  Benchmark workload limit: ${BENCHMARK_WORKLOAD_LIMIT}"
+elif [[ "${WORKLOAD_PROFILE}" == "wa" ]]; then
+    echo "  Benchmark workloads: all"
 fi
 if [[ -n "${BENCHMARK_WARMUP_RUNS}${BENCHMARK_ITERATIONS}${BENCHMARK_NUM_TRIALS}" ]]; then
     echo "  Benchmark config: warmup=${BENCHMARK_WARMUP_RUNS:-default} iterations=${BENCHMARK_ITERATIONS:-default} trials=${BENCHMARK_NUM_TRIALS:-default}"
@@ -722,9 +1043,12 @@ docker run --rm \
 echo
 echo "KDA ${MODE} run completed."
 echo "Workspace: ${ABS_WORKSPACE}"
-echo "Draft: ${ABS_WORKSPACE}/docs/draft.md"
 if [[ "${MODE}" == "execute" ]]; then
-    echo "Plan: ${ABS_WORKSPACE}/docs/plan.md"
+    echo "Attempt workspaces: ${ABS_WORKSPACE}/baseline/b* and ${ABS_WORKSPACE}/d*/b*"
+    echo "Current pointer: ${ABS_WORKSPACE}/current.json"
+    echo "Agent summary: ${ABS_WORKSPACE}/outputs/execution-summary.agent.md"
     echo "Execution summary: ${ABS_WORKSPACE}/outputs/execution-summary.md"
+else
+    echo "Draft: ${ABS_WORKSPACE}/docs/draft.md"
 fi
 echo "Last message: ${ABS_WORKSPACE}/outputs/last-message.md"

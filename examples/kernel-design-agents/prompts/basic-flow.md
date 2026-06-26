@@ -35,9 +35,21 @@ For expensive kernels, prefer staged validation over all-at-once benchmarking:
 pack first, then any direct build/compile smoke, then a reduced benchmark
 subset, and only then a broader sweep if the candidate still looks viable.
 If the workspace provides `scripts/check_cuda_extension.py` and the active
-build is CUDA with `binding=torch`, use that script for the compile-smoke step.
-When you run `scripts/run_local.py`, keep the benchmark artifacts in the
-canonical paths `runs/run_local.txt` and `runs/run_local_results.json`.
+build is CUDA with `binding=torch`, use that script for the compile-smoke step
+and pass the artifact path explicitly, for example
+`python scripts/check_cuda_extension.py --log-file runs/check_cuda_extension.txt`.
+When you run `scripts/run_local.py`, pass the artifact paths explicitly, for
+example
+`python scripts/run_local.py --log-file runs/run_local.txt --results-json runs/run_local_results.json`.
+Do not rely on environment-variable defaults for these artifact paths.
+Respect the configured workload scope. Use smoke workloads to bootstrap
+correctness quickly, but do not claim broad performance or correctness results
+beyond the workloads you actually evaluated in this run.
+If the workspace contains `docs/task-context.md`, read it before exploring
+dataset internals or library implementation details.
+If the workspace does not yet have a validated baseline, prefer the simplest
+correct self-contained candidate that mirrors the local reference semantics
+before attempting low-level optimization.
 
 ## Inspection Rules
 
@@ -54,11 +66,17 @@ canonical paths `runs/run_local.txt` and `runs/run_local_results.json`.
   for this torch-extension flow.
 - If the workspace contains build/config files, implementation files, or run
   scripts, inspect those exact files before writing the draft.
+- If the workspace contains `docs/task-context.md`, treat it as the preferred
+  local summary of the active definition, selected workloads, and baseline
+  references.
 - When a workspace includes multiple implementation paths such as Triton and
   CUDA, explicitly identify which one is active from the local config files.
 - Treat benchmark baselines, packaged solutions, and dataset artifacts as
   references for semantics, constraints, and performance context. Do not turn
   them into runtime dependencies unless the task contract explicitly allows it.
+- For a first `w1` baseline on CUDA with `binding=torch`, a straightforward
+  self-contained ATen-backed Torch extension inside `solution/cuda/kernel.cu`
+  is usually a better starting point than an aggressive custom CUDA kernel.
 - Prefer self-contained implementation changes under the active submission
   source directory. Do not mistake harness-only or docs-only edits for task
   completion.

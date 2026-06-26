@@ -224,3 +224,7 @@ rfc.md
 
 # Markdown/mermaid lint tooling deps
 scripts/lint-mermaid/node_modules/
+
+# data
+mlsys26-contest
+results

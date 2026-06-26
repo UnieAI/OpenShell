@@ -8,6 +8,7 @@ workspace artifact file.
 
 import argparse
 import json
+import logging
 import os
 import sys
 import traceback
@@ -20,6 +21,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from flashinfer_bench import Benchmark, BenchmarkConfig, Solution, TraceSet
 from scripts.pack_solution import pack_solution
+
+LOGGER = logging.getLogger("kda.run_local")
 
 
 class TeeStream:
@@ -42,7 +45,7 @@ class TeeStream:
 
 
 @contextmanager
-def tee_output(log_path: str | None):
+def tee_output(log_path):
     """Duplicate stdout/stderr to a log file when requested."""
     if not log_path:
         yield
@@ -66,7 +69,7 @@ def tee_output(log_path: str | None):
         log_file.close()
 
 
-def parse_optional_int(value: str | None, field_name: str) -> int | None:
+def parse_optional_int(value, field_name: str):
     """Parse positive integers from CLI/env values."""
     if value in (None, ""):
         return None
@@ -76,7 +79,7 @@ def parse_optional_int(value: str | None, field_name: str) -> int | None:
     return parsed
 
 
-def parse_uuid_list(value: str | None) -> list[str]:
+def parse_uuid_list(value) -> list[str]:
     """Parse a comma-separated workload UUID list."""
     if value in (None, ""):
         return []
@@ -84,7 +87,7 @@ def parse_uuid_list(value: str | None) -> list[str]:
     return [item for item in items if item]
 
 
-def get_error_detail(evaluation) -> str | None:
+def get_error_detail(evaluation):
     """Best-effort extraction of actionable evaluation failure details."""
     candidate_attrs = (
         "message",
@@ -102,7 +105,60 @@ def get_error_detail(evaluation) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
 
+    model_dump = getattr(evaluation, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        nested = get_error_detail_from_mapping(dumped)
+        if nested:
+            return nested
+
     return None
+
+
+def get_error_detail_from_mapping(value):
+    """Recursively search mappings/lists for likely error strings."""
+    interesting_keys = (
+        "message",
+        "error",
+        "error_message",
+        "stderr",
+        "stdout",
+        "detail",
+        "details",
+        "traceback",
+        "exception",
+        "reason",
+    )
+
+    if isinstance(value, dict):
+        for key in interesting_keys:
+            nested = value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+        for nested in value.values():
+            detail = get_error_detail_from_mapping(nested)
+            if detail:
+                return detail
+
+    if isinstance(value, list):
+        for nested in value:
+            detail = get_error_detail_from_mapping(nested)
+            if detail:
+                return detail
+
+    return None
+
+
+def configure_logging():
+    """Ensure flashinfer-bench logger output reaches the workspace log."""
+    level_name = os.environ.get("KDA_BENCHMARK_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(levelname)s:%(name)s:%(message)s",
+        force=True,
+    )
+    LOGGER.debug("Configured logging with level=%s", level_name)
 
 
 def get_trace_set_path() -> str:
@@ -146,7 +202,7 @@ def resolve_dump_traces(requested: bool, trace_set_path: str) -> bool:
     return False
 
 
-def select_workloads(all_workloads, workload_limit: int | None, workload_uuids: list[str]):
+def select_workloads(all_workloads, workload_limit, workload_uuids: list[str]):
     """Choose either an explicit subset of workloads or the first N entries."""
     if workload_uuids:
         workload_by_uuid = {extract_workload_uuid(workload): workload for workload in all_workloads}
@@ -173,7 +229,7 @@ def build_benchmark_config(args: argparse.Namespace) -> BenchmarkConfig:
 def run_benchmark(
     solution: Solution,
     config: BenchmarkConfig,
-    workload_limit: int | None,
+    workload_limit,
     workload_uuids: list[str],
     dump_traces: bool,
 ) -> tuple[dict, list]:
@@ -256,7 +312,7 @@ def print_results(results: dict):
 
 
 def write_results_json(
-    output_path: str | None,
+    output_path,
     solution: Solution,
     config: BenchmarkConfig,
     selected_workloads: list,
@@ -307,6 +363,7 @@ def main():
 
     with tee_output(args.log_file or None):
         try:
+            configure_logging()
             print("Packing solution from source files...")
             solution_path = pack_solution()
 

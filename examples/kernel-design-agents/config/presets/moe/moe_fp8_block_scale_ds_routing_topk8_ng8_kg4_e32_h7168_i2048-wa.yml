@@ -1,12 +1,14 @@
-# Legacy single-workload compatibility preset for the OpenShell KDA example.
-# Fixed UUID from the official dataset:
-# - b8f4f012-a32e-4356-b4e1-7665b3d598af -> seq_len=7
+# Generic definition-centric preset.
+# Family: moe
+# Definition: moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048
+# Profile: wa (all workloads)
+# Workload count: 19
 # Keep this file flat: one key/value per line.
 
-preset_name: "moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048-w1-legacy"
+preset_name: "moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048-wa"
 task_family: "moe"
-workload_profile: "w1"
-workspace: "examples/kernel-design-agents/results/kda-flashinfer-moe-phase1-w1"
+workload_profile: "wa"
+workspace: "examples/kernel-design-agents/results/kda-moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048-wa"
 starter_kit: "examples/kernel-design-agents/starter-kit"
 gpus: "1"
 model: "gpt-5.4-mini"
@@ -28,7 +30,7 @@ benchmark_warmup_runs: "1"
 benchmark_iterations: "3"
 benchmark_num_trials: "1"
 benchmark_workload_limit: ""
-benchmark_workload_uuids: "b8f4f012-a32e-4356-b4e1-7665b3d598af"
+benchmark_workload_uuids: ""
 
 task_name: "FlashInfer MoE FP8 phase-1 kernel optimization"
 objective: "implement a correct self-contained CUDA candidate for moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048 and use the validated baseline as the starting point for later optimization"

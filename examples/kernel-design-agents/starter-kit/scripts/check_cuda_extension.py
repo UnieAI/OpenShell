@@ -39,7 +39,7 @@ class TeeStream:
 
 
 @contextmanager
-def tee_output(log_path: str | None):
+def tee_output(log_path):
     if not log_path:
         yield
         return

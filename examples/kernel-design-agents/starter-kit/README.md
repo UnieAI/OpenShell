@@ -103,7 +103,9 @@ python scripts/pack_solution.py
 Test your solution on your local GPU:
 
 ```bash
-python scripts/run_local.py
+python scripts/run_local.py \
+  --log-file runs/run_local.txt \
+  --results-json runs/run_local_results.json
 ```
 
 Requires: Local CUDA-capable GPU and `FIB_DATASET_PATH` environment variable.

@@ -1,12 +1,15 @@
-# Legacy single-workload compatibility preset for the OpenShell KDA example.
-# Fixed UUID from the official dataset:
-# - b8f4f012-a32e-4356-b4e1-7665b3d598af -> seq_len=7
+# Generic definition-centric preset.
+# Family: gdn
+# Definition: gdn_decode_qk4_v8_d128_k_last
+# Profile: w1 (single-workload smoke test)
+# Fixed UUID:
+# - 901e5104-dccb-4c3f-ae13-ef4d31a4d456 -> batch_size=1
 # Keep this file flat: one key/value per line.
 
-preset_name: "moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048-w1-legacy"
-task_family: "moe"
+preset_name: "gdn_decode_qk4_v8_d128_k_last-w1"
+task_family: "gdn"
 workload_profile: "w1"
-workspace: "examples/kernel-design-agents/results/kda-flashinfer-moe-phase1-w1"
+workspace: "examples/kernel-design-agents/results/kda-gdn_decode_qk4_v8_d128_k_last-w1"
 starter_kit: "examples/kernel-design-agents/starter-kit"
 gpus: "1"
 model: "gpt-5.4-mini"
@@ -16,8 +19,8 @@ auto_scaffold: true
 force_scaffold: false
 fib_dataset_path: "examples/kernel-design-agents/mlsys26-contest"
 
-solution_name: "openshell-kda-moe-phase1-v1"
-definition: "moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048"
+solution_name: "openshell-kda-gdn-decode-v1"
+definition: "gdn_decode_qk4_v8_d128_k_last"
 author: "openshell"
 language: "cuda"
 entry_point: "kernel.cu::kernel"
@@ -28,12 +31,12 @@ benchmark_warmup_runs: "1"
 benchmark_iterations: "3"
 benchmark_num_trials: "1"
 benchmark_workload_limit: ""
-benchmark_workload_uuids: "b8f4f012-a32e-4356-b4e1-7665b3d598af"
+benchmark_workload_uuids: "901e5104-dccb-4c3f-ae13-ef4d31a4d456"
 
-task_name: "FlashInfer MoE FP8 phase-1 kernel optimization"
-objective: "implement a correct self-contained CUDA candidate for moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048 and use the validated baseline as the starting point for later optimization"
-correctness: "solution.json packs successfully; the implementation remains self-contained under solution/; local benchmark results remain numerically valid for the selected definition using the official MoE tolerance profile"
-target: "establish a correct baseline candidate for the exact MoE definition, then reduce latency on the selected workload profile without correctness regressions"
+task_name: "FlashInfer GDN decode kernel optimization"
+objective: "implement a correct self-contained CUDA candidate for gdn_decode_qk4_v8_d128_k_last and use the validated baseline as the starting point for later optimization"
+correctness: "solution.json packs successfully; the implementation remains self-contained under solution/; local benchmark results remain numerically valid for the selected definition using the official GDN decode tolerance profile"
+target: "establish a correct baseline candidate for the exact GDN decode definition, then reduce latency on the selected workload profile without correctness regressions"
 allowed: "edit files inside this workspace only; implement the submission under solution/cuda/; keep sources self-contained; do not call flashinfer, deep_gemm, or similar specialized kernel libraries at runtime; use dataset definitions and baseline solutions as references only"
 validate: "python scripts/pack_solution.py"
 evaluate: "FIB_DATASET_PATH=/path/to/mlsys26-contest python scripts/run_local.py --log-file runs/run_local.txt --results-json runs/run_local_results.json"

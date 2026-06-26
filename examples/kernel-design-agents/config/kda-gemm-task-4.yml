@@ -1,4 +1,5 @@
-# Four-workload representative preset for the OpenShell Kernel Design Agents example.
+# Legacy representative-subset preset kept for compatibility only.
+# This is not part of the new generic core workload profiles (`w1`, `wa`).
 # Fixed UUIDs from the official dataset:
 # - e05c6c03-5603-4a1c-b34c-dcce0ecaeea4 -> seq_len=1
 # - 6230e838-67ca-41dd-a9d6-6f36b7676c6b -> seq_len=32
@@ -6,6 +7,9 @@
 # - 5e8dc11c-f2a9-42d5-8dce-9419cbf34d5d -> seq_len=14107
 # Keep this file flat: one key/value per line.
 
+preset_name: "moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048-w4-legacy"
+task_family: "moe"
+workload_profile: "custom"
 workspace: "examples/kernel-design-agents/results/kda-flashinfer-moe-phase1-w4"
 starter_kit: "examples/kernel-design-agents/starter-kit"
 gpus: "1"
@@ -31,10 +35,10 @@ benchmark_workload_limit: ""
 benchmark_workload_uuids: "e05c6c03-5603-4a1c-b34c-dcce0ecaeea4,6230e838-67ca-41dd-a9d6-6f36b7676c6b,1a4c6ba1-3cd2-4d7d-b716-84f2d52b69fc,5e8dc11c-f2a9-42d5-8dce-9419cbf34d5d"
 
 task_name: "FlashInfer MoE FP8 phase-1 kernel optimization"
-objective: "implement a first correct self-contained CUDA baseline for moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048 and use it as the foundation for later optimization"
+objective: "implement a correct self-contained CUDA candidate for moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048 and use the validated baseline as the starting point for later optimization"
 correctness: "solution.json packs successfully; the implementation remains self-contained under solution/; local benchmark results remain numerically valid for the selected definition using the official MoE tolerance profile"
-target: "establish a correct baseline candidate for the exact MoE definition, then reduce latency versus the FlashInfer baseline without correctness regressions"
+target: "establish a correct baseline candidate for the exact MoE definition, then reduce latency on the selected workload profile without correctness regressions"
 allowed: "edit files inside this workspace only; implement the submission under solution/cuda/; keep sources self-contained; do not call flashinfer, deep_gemm, or similar specialized kernel libraries at runtime; use dataset definitions and baseline solutions as references only"
 validate: "python scripts/pack_solution.py"
-evaluate: "FIB_DATASET_PATH=/path/to/mlsys26-contest python scripts/run_local.py"
-promote: "the candidate packs successfully, passes any applicable CUDA compile smoke, and benchmark evidence shows correctness on representative workloads before any later full local evaluation sweep"
+evaluate: "FIB_DATASET_PATH=/path/to/mlsys26-contest python scripts/run_local.py --log-file runs/run_local.txt --results-json runs/run_local_results.json"
+promote: "the candidate packs successfully, passes any applicable CUDA compile smoke, and benchmark evidence shows correctness on the configured workload profile before any broader evaluation sweep"
